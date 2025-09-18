@@ -7,11 +7,11 @@ from datetime import datetime
 import pytz
 
 # Channel Configuration
-BUTTON_CHANNEL_ID = 1418020687913816175  # Channel for Clock In/Out button message and ephemeral responses
-UPDATE_REPORTS_CHANNEL_ID = 1418026574975996145  # Channel for status report submissions (update reports)
-LOG_CHANNEL_ID = 1418026837136904212    # Private channel for clock-in/out and status report logs
+BUTTON_CHANNEL_ID = 1418080452639461440  # Channel for Clock In/Out button message and ephemeral responses
+UPDATE_REPORTS_CHANNEL_ID = 1418080010484453396  # Channel for status report submissions (update reports)
+LOG_CHANNEL_ID = 1418013767341703359    # Private channel for clock-in/out and status report logs
 WERT_USER_ID = '1270796696259133501'  # Wert's user ID
-CATEGORY_ID = os.getenv('CATEGORY_ID', 'REPLACE_WITH_CATEGORY_ID')  # Use env variable or fallback
+CATEGORY_ID = os.getenv('CATEGORY_ID', '1418080302424785026')  # Use env variable or fallback
 
 # Set up the bot with necessary intents
 intents = discord.Intents.default()
@@ -130,6 +130,25 @@ class ClockButtons(View):
                 'clock_out_enabled': False,
                 'clock_in_time': None
             }
+            # Delete private channel if it exists
+            if user_id in user_private_channels:
+                try:
+                    private_channel = bot.get_channel(user_private_channels[user_id])
+                    if private_channel:
+                        await private_channel.delete()
+                        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+                        if log_channel:
+                            date_str = clock_out_dt.strftime("%Y-%m-%d")
+                            time_str = clock_out_dt.strftime("%I:%M:%S %p %Z")
+                            await log_channel.send(
+                                f"Private channel report-001-{str(user_id)[-4:]} for {interaction.user.name} (ID: {user_id}) "
+                                f"in category {CATEGORY_ID} deleted at ({date_str}) ({time_str})"
+                            )
+                    del user_private_channels[user_id]
+                except Exception as e:
+                    wert_user = await bot.fetch_user(WERT_USER_ID)
+                    if wert_user:
+                        await wert_user.send(f"Error deleting private channel for {interaction.user.name} (ID: {user_id}) in category {CATEGORY_ID}: {str(e)}")
             # Log clock-out to private channel
             log_channel = bot.get_channel(LOG_CHANNEL_ID)
             if log_channel:
@@ -168,6 +187,7 @@ async def on_ready():
                 "4. After submitting, your report will be copied to the update reports channel, and your private channel will be deleted.\n"
                 "5. Click 'Clock Out' to end your session.\n"
                 "6. Use `/checkstate` to check your clock-in status (works in any channel, including your private status channel).\n"
+                "7. Use `/reset @user` to clock in any user without needing a status report (one-time bypass).\n"
                 "Contact <@1270796696259133501> if you encounter any issues."
             )
             await button_channel.send(instructions, view=view)
@@ -252,7 +272,7 @@ async def on_message(message: discord.Message):
             )
     await bot.process_commands(message)
 
-# Optional debug command to check state
+# Command: Check clock-in state
 @app_commands.command(name="checkstate", description="Check clock-in state")
 async def checkstate(interaction: discord.Interaction):
     state = clocked_in_users.get(interaction.user.id, {'clocked_in': False, 'clock_out_enabled': False})
@@ -261,8 +281,92 @@ async def checkstate(interaction: discord.Interaction):
         ephemeral=True
     )
 
-# Add the command to the bot
+# Command: Reset and clock in any user without report requirement
+@app_commands.command(name="reset", description="Reset and clock in a user, bypassing status report requirement for this session")
+@app_commands.describe(user="The user to reset and clock in (mention or ID)")
+async def reset(interaction: discord.Interaction, user: discord.User):
+    await interaction.response.defer(ephemeral=True)
+    target_user = user
+    user_id = target_user.id
+    guild = interaction.guild
+    # Reset user state
+    clocked_in_users[user_id] = {
+        'clocked_in': True,
+        'clock_out_enabled': True,  # Allow clock out without report
+        'clock_in_time': datetime.now(CDT)
+    }
+    # Delete existing private channel if it exists
+    if user_id in user_private_channels:
+        try:
+            private_channel = bot.get_channel(user_private_channels[user_id])
+            if private_channel:
+                await private_channel.delete()
+                log_channel = bot.get_channel(LOG_CHANNEL_ID)
+                if log_channel:
+                    clock_dt = datetime.now(CDT)
+                    date_str = clock_dt.strftime("%Y-%m-%d")
+                    time_str = clock_dt.strftime("%I:%M:%S %p %Z")
+                    await log_channel.send(
+                        f"Private channel report-001-{str(user_id)[-4:]} for {target_user.name} (ID: {user_id}) "
+                        f"in category {CATEGORY_ID} deleted at ({date_str}) ({time_str}) due to /reset by {interaction.user.name}"
+                    )
+            del user_private_channels[user_id]
+        except Exception as e:
+            wert_user = await bot.fetch_user(WERT_USER_ID)
+            if wert_user:
+                await wert_user.send(f"Error deleting existing private channel for {target_user.name} (ID: {user_id}) in category {CATEGORY_ID} during /reset by {interaction.user.name}: {str(e)}")
+    # Create new private status channel
+    category = guild.get_channel(int(CATEGORY_ID))
+    if not category:
+        wert_user = await bot.fetch_user(WERT_USER_ID)
+        if wert_user:
+            await wert_user.send(f"Error: Category {CATEGORY_ID} not found for creating private channel for {target_user.name} (ID: {user_id}) during /reset by {interaction.user.name}")
+        await interaction.followup.send("Error: Category for private channels not found. Please contact an admin.", ephemeral=True)
+        return
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        target_user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            read_messages=True,
+            read_message_history=True,
+            use_application_commands=True
+        )
+    }
+    try:
+        private_channel = await guild.create_text_channel(
+            f"report-001-{str(user_id)[-4:]}",
+            overwrites=overwrites,
+            category=category
+        )
+        user_private_channels[user_id] = private_channel.id
+        await private_channel.send(
+            f"{target_user.mention}, you have been clocked in via /reset by {interaction.user.mention}. "
+            "You can clock out without submitting a report for this session. "
+            "Optionally, submit a Status Report with an attachment if desired."
+        )
+    except Exception as e:
+        wert_user = await bot.fetch_user(WERT_USER_ID)
+        if wert_user:
+            await wert_user.send(f"Error creating private channel for {target_user.name} (ID: {user_id}) in category {CATEGORY_ID} during /reset by {interaction.user.name}: {str(e)}")
+        await interaction.followup.send("Error creating private status channel for the user. Please contact an admin.", ephemeral=True)
+        return
+    # Log reset clock-in
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        clock_dt = datetime.now(CDT)
+        date_str = clock_dt.strftime("%Y-%m-%d")
+        time_str = clock_dt.strftime("%I:%M:%S %p %Z")
+        await log_channel.send(f"<@{user_id}> clocked in via /reset (no report required) by {interaction.user.name} at ({date_str}) ({time_str})")
+    await interaction.followup.send(
+        f"{target_user.mention} has been clocked in via /reset! They can clock out without a report in their private status channel: {private_channel.mention}.",
+        ephemeral=True
+    )
+
+# Add commands to the bot
 bot.tree.add_command(checkstate)
+bot.tree.add_command(reset)
 
 # Run the bot using the token from Render environment variables
 bot.run(os.getenv('DISCORD_BOT_TOKEN'))
