@@ -5,28 +5,13 @@ from discord.ui import Button, View
 import os
 from datetime import datetime
 import pytz
-from flask import Flask
-from threading import Thread
-
-# Initialize Flask app
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Bot is alive!"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
-
-# Run Flask in a separate thread
-Thread(target=run_flask).start()
 
 # Channel Configuration
-BUTTON_CHANNEL_ID = 1418080452639461440  # Channel for Clock In/Out button message and ephemeral responses
-UPDATE_REPORTS_CHANNEL_ID = 1418080010484453396  # Channel for status report submissions (update reports)
-LOG_CHANNEL_ID = 1418013767341703359    # Private channel for clock-in/out and status report logs
+BUTTON_CHANNEL_ID = 1418020687913816175  # Channel for Clock In/Out button message and ephemeral responses
+UPDATE_REPORTS_CHANNEL_ID = 1418026574975996145  # Channel for status report submissions (update reports)
+LOG_CHANNEL_ID = 1418026837136904212    # Private channel for clock-in/out and status report logs
 WERT_USER_ID = '1270796696259133501'  # Wert's user ID
-CATEGORY_ID = '1418080302424785026'  # Replace with the category ID for temporary channels
+CATEGORY_ID = os.getenv('CATEGORY_ID', 'REPLACE_WITH_CATEGORY_ID')  # Use env variable or fallback
 
 # Set up the bot with necessary intents
 intents = discord.Intents.default()
@@ -279,7 +264,5 @@ async def checkstate(interaction: discord.Interaction):
 # Add the command to the bot
 bot.tree.add_command(checkstate)
 
-# Run the bot using the token from Replit Secrets
+# Run the bot using the token from Render environment variables
 bot.run(os.getenv('DISCORD_BOT_TOKEN'))
-
-
